@@ -1,0 +1,261 @@
+name: Build UniRig Executables
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        python-version: ['3.10']
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1
+    
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install libomp
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        
+        # Install PyTorch with CPU-only to reduce size
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        
+        # Install other requirements (excluding bpy and flash_attn for compatibility)
+        pip install transformers python-box einops omegaconf pytorch_lightning lightning
+        pip install addict timm fast-simplification trimesh open3d pyrender huggingface_hub
+        
+        # Skip bpy and flash_attn for executable builds
+        # bpy conflicts with standalone execution, flash_attn has platform issues
+    
+    - name: Create PyInstaller spec file
+      run: |
+        cat > unirig.spec << 'EOF'
+        # -*- mode: python ; coding: utf-8 -*-
+        import sys
+        import os
+        from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+        
+        # Collect data files for various packages
+        datas = []
+        datas += collect_data_files('transformers')
+        datas += collect_data_files('tokenizers')
+        datas += collect_data_files('huggingface_hub')
+        datas += collect_data_files('trimesh')
+        
+        # Add config files
+        datas += [('configs', 'configs')]
+        
+        # Collect hidden imports
+        hiddenimports = []
+        hiddenimports += collect_submodules('transformers')
+        hiddenimports += collect_submodules('torch')
+        hiddenimports += collect_submodules('pytorch_lightning')
+        hiddenimports += collect_submodules('lightning')
+        hiddenimports += collect_submodules('trimesh')
+        hiddenimports += collect_submodules('open3d')
+        hiddenimports += ['einops', 'omegaconf', 'addict', 'timm']
+        
+        a = Analysis(
+            ['run_executable.py'],
+            pathex=[],
+            binaries=[],
+            datas=datas,
+            hiddenimports=hiddenimports,
+            hookspath=[],
+            hooksconfig={},
+            runtime_hooks=[],
+            excludes=['bpy', 'flash_attn'],  # Exclude problematic modules
+            win_no_prefer_redirects=False,
+            win_private_assemblies=False,
+            cipher=None,
+            noarchive=False,
+        )
+        
+        pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+        
+        exe = EXE(
+            pyz,
+            a.scripts,
+            a.binaries,
+            a.zipfiles,
+            a.datas,
+            [],
+            name='unirig',
+            debug=False,
+            bootloader_ignore_signals=False,
+            strip=False,
+            upx=True,
+            upx_exclude=[],
+            runtime_tmpdir=None,
+            console=True,
+            disable_windowed_traceback=False,
+            argv_emulation=False,
+            target_arch=None,
+            codesign_identity=None,
+            entitlements_file=None,
+        )
+        EOF
+    
+    - name: Create launcher script
+      run: |
+        cat > launcher.py << 'EOF'
+        #!/usr/bin/env python3
+        """
+        UniRig Launcher - Wrapper for Blender addon integration
+        """
+        import sys
+        import os
+        import subprocess
+        import argparse
+        
+        def main():
+            # Get the directory where this executable is located
+            if getattr(sys, 'frozen', False):
+                # Running as PyInstaller bundle
+                bundle_dir = sys._MEIPASS
+                exe_dir = os.path.dirname(sys.executable)
+            else:
+                # Running as script
+                bundle_dir = os.path.dirname(os.path.abspath(__file__))
+                exe_dir = bundle_dir
+            
+            # Set up environment
+            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # For macOS
+            
+            # Import and run the main application
+            sys.path.insert(0, bundle_dir)
+            
+            try:
+                # Import the main run module
+                import run
+                print("UniRig executable started successfully")
+            except ImportError as e:
+                print(f"Error importing run module: {e}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"Error running UniRig: {e}")
+                sys.exit(1)
+        
+        if __name__ == "__main__":
+            main()
+        EOF
+    
+    - name: Build executable
+      run: |
+        # Replace the main run.py with our launcher temporarily
+        mv run.py run_original.py
+        mv launcher.py run.py
+        
+        # Build with PyInstaller
+        pyinstaller unirig.spec --clean --noconfirm
+        
+        # Restore original run.py
+        mv run.py launcher.py
+        mv run_original.py run.py
+    
+    - name: Create distribution package
+      shell: bash
+      run: |
+        # Create distribution directory
+        mkdir -p dist/unirig-${{ matrix.os }}
+        
+        # Copy executable
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          cp dist/unirig.exe dist/unirig-${{ matrix.os }}/
+          EXE_NAME="unirig.exe"
+        else
+          cp dist/unirig dist/unirig-${{ matrix.os }}/
+          EXE_NAME="unirig"
+        fi
+        
+        # Copy configs and other necessary files
+        cp -r configs dist/unirig-${{ matrix.os }}/
+        cp README.md dist/unirig-${{ matrix.os }}/
+        cp LICENSE dist/unirig-${{ matrix.os }}/
+        
+        # Create a simple usage script for Blender addon
+        cat > dist/unirig-${{ matrix.os }}/run_unirig.py << 'EOF'
+        """
+        Simple wrapper for Blender addon to call UniRig executable
+        """
+        import subprocess
+        import sys
+        import os
+        
+        def run_unirig(args):
+            """Run UniRig with given arguments"""
+            exe_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            if sys.platform == "win32":
+                exe_path = os.path.join(exe_dir, "unirig.exe")
+            else:
+                exe_path = os.path.join(exe_dir, "unirig")
+            
+            if not os.path.exists(exe_path):
+                raise FileNotFoundError(f"UniRig executable not found at {exe_path}")
+            
+            # Run the executable
+            result = subprocess.run([exe_path] + args, 
+                                  capture_output=True, 
+                                  text=True, 
+                                  cwd=exe_dir)
+            
+            return result.returncode, result.stdout, result.stderr
+        EOF
+        
+        # Create archive
+        cd dist
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          7z a unirig-${{ matrix.os }}.zip unirig-${{ matrix.os }}/
+        else
+          tar -czf unirig-${{ matrix.os }}.tar.gz unirig-${{ matrix.os }}/
+        fi
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: unirig-${{ matrix.os }}
+        path: |
+          dist/unirig-${{ matrix.os }}.*
+        retention-days: 30
+    
+    - name: Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/unirig-${{ matrix.os }}.*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
