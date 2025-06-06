@@ -1,7 +1,7 @@
 mode: predict
 debug: False
 experiment_name: quick_inference_skeleton_articulationxl_ar_256
-resume_from_checkpoint: experiments/skeleton/articulation-xl_quantization_256/model.ckpt
+resume_from_checkpoint: models/skeleton/articulation-xl_quantization_256/model.ckpt
 
 components:
   data: quick_inference

@@ -1,7 +1,7 @@
 mode: predict
 debug: False
 experiment_name: quick_inference_skin
-resume_from_checkpoint: experiments/skin/articulation-xl/model.ckpt
+resume_from_checkpoint: models/skin/articulation-xl/model.ckpt
 
 components:
   data: quick_inference
