@@ -60,6 +60,7 @@ jobs:
         # bpy conflicts with standalone execution, flash_attn has platform issues
     
     - name: Create PyInstaller spec file
+      shell: bash
       run: |
         cat > unirig.spec << 'EOF'
         # -*- mode: python ; coding: utf-8 -*-
@@ -129,6 +130,7 @@ jobs:
         EOF
     
     - name: Create launcher script
+      shell: bash
       run: |
         cat > launcher.py << 'EOF'
         #!/usr/bin/env python3
