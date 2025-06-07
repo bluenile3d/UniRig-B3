@@ -45,19 +45,19 @@ jobs:
         brew install libomp
     
     - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        
-        # Install PyTorch with CPU-only to reduce size
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        
-        # Install other requirements (excluding bpy and flash_attn for compatibility)
-        pip install transformers python-box einops omegaconf pytorch_lightning lightning
-        pip install addict timm fast-simplification trimesh open3d pyrender huggingface_hub
-        
-        # Skip bpy and flash_attn for executable builds
-        # bpy conflicts with standalone execution, flash_attn has platform issues
+  run: |
+    python -m pip install --upgrade pip
+    pip install pyinstaller
+    
+    # Install PyTorch with CPU-only to reduce size
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    
+    # Install other requirements including bpy
+    pip install transformers python-box einops omegaconf pytorch_lightning lightning
+    pip install addict timm fast-simplification trimesh open3d pyrender huggingface_hub
+    pip install bpy==4.2
+    
+    # Skip flash_attn for executable builds (has platform issues)
     
     - name: Create PyInstaller spec file
       shell: bash
